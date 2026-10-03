@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="zh-TW" xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>台股定期定額 & 股息再投入回測系統</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body { background-color: #f4f6f9; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
+        .card { border-radius: 12px; border: none; box-shadow: 0 4px 12px rgba(0,0,0,0.05); }
+        .kpi-title { font-size: 0.85rem; color: #6c757d; font-weight: 600; text-transform: uppercase; }
+        .kpi-value { font-size: 1.6rem; font-weight: 700; color: #2b303a; }
+        .text-rate { font-size: 1.6rem; font-weight: 700; }
+    </style>
+</head>
+<body class="py-4">
+
+<div class="container">
+    <div class="d-flex align-items-center mb-4">
+        <i class="fa-solid fa-chart-line fa-2x text-primary me-3"></i>
+        <div>
+            <h3 class="mb-0 fw-bold">台股量化分析平台</h3>
+            <p class="text-muted mb-0">定期定額 (DCA) 與股息再投入 (DRIP) 複利回測引擎</p>
+        </div>
+    </div>
+
+    <div class="row g-4">
+        <div class="col-lg-4">
+            <div class="card p-4">
+                <h5 class="fw-bold mb-3"><i class="fa-solid fa-sliders me-2 text-primary"></i>回測參數設定</h5>
+                <form id="backtestForm">
+                    <div class="mb-3">
+                        <label class="form-label fw-semibold">股票代號</label>
+                        <input type="text" class="form-control" id="symbol" value="00878" required>
+                        <div class="form-text">例：00878、0050、2886</div>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label fw-semibold">回測模式</label>
+                        <select class="form-select" id="strategyMode">
+                            <option value="drip" selected>股息再投入</option>
+                            <option value="basic">定期定額</option>
+                        </select>
+                    </div>
+
+                    <div class="row g-2 mb-3">
+                        <div class="col-6">
+                            <label class="form-label fw-semibold">開始日期</label>
+                            <input type="date" class="form-control" id="startDate" value="2021-01-01" required>
+                        </div>
+                        <div class="col-6">
+                            <label class="form-label fw-semibold">結束日期</label>
+                            <input type="date" class="form-control" id="endDate" value="2026-09-01" required>
+                        </div>
+                    </div>
+
+                    <div class="row g-2 mb-4">
+                        <div class="col-6">
+                            <label class="form-label fw-semibold">每月扣款金額</label>
+                            <div class="input-group">
+                                <span class="input-group-text">$</span>
+                                <input type="number" class="form-control" id="amount" value="10000" step="1000" required>
+                            </div>
+                        </div>
+                        <div class="col-6">
+                            <label class="form-label fw-semibold">每月扣款日</label>
+                            <div class="input-group">
+                                <input type="number" class="form-control" id="day" value="5" min="1" max="28" required>
+                                <span class="input-group-text">日</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <button type="submit" class="btn btn-primary w-100 py-2 fw-semibold" id="btnSubmit">
+                        <i class="fa-solid fa-play me-2"></i>執行回測
+                    </button>
+                </form>
+            </div>
+        </div>
+
+        <div class="col-lg-8">
+            <div class="row g-3 mb-4">
+                <div class="col-md-3 col-6">
+                    <div class="card p-3">
+                        <div class="kpi-title">總投入本金</div>
+                        <div class="kpi-value text-secondary" id="kpiInvested">$0</div>
+                    </div>
+                </div>
+                <div class="col-md-3 col-6">
+                    <div class="card p-3">
+                        <div class="kpi-title">最終資產價值</div>
+                        <div class="kpi-value text-primary" id="kpiAsset">$0</div>
+                    </div>
+                </div>
+                <div class="col-md-3 col-6">
+                    <div class="card p-3">
+                        <div class="kpi-title">累積總股數</div>
+                        <div class="kpi-value text-dark" id="kpiShares">0 股</div>
+                    </div>
+                </div>
+                <div class="col-md-3 col-6">
+                    <div class="card p-3">
+                        <div class="kpi-title">總報酬率</div>
+                        <div class="text-rate" id="kpiReturn">0.00%</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card p-4">
+                <h5 class="fw-bold mb-3"><i class="fa-solid fa-chart-simple me-2 text-primary"></i>本金與資產對比分析</h5>
+                <div style="height: 320px;">
+                    <canvas id="resultChart"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    let myChart = null;
+
+    // 表單送出觸發 AJAX
+    document.getElementById('backtestForm').addEventListener('submit', async function(e) {
+        e.preventDefault();
+
+        const btn = document.getElementById('btnSubmit');
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>回測計算中...';
+
+        const symbol = document.getElementById('symbol').value;
+        const mode = document.getElementById('strategyMode').value;
+        const startDate = document.getElementById('startDate').value;
+        const endDate = document.getElementById('endDate').value;
+        const amount = document.getElementById('amount').value;
+        const day = document.getElementById('day').value;
+
+        // 動態根據選取的模式決定呼叫 /basic 還是 /drip
+        const endpoint = `/api/backtest/${mode}?symbol=${symbol}&startDate=${startDate}&endDate=${endDate}&amount=${amount}&day=${day}`;
+
+        try {
+            const response = await fetch(endpoint);
+            if (!response.ok) throw new Error('API 呼叫失敗');
+            const data = await response.json();
+
+            // 更新數據卡片
+            document.getElementById('kpiInvested').innerText = '$' + Number(data.totalInvestedAmount).toLocaleString();
+            document.getElementById('kpiAsset').innerText = '$' + Number(data.finalAssetValue).toLocaleString();
+            document.getElementById('kpiShares').innerText = Number(data.finalShares).toLocaleString() + ' 股';
+
+            const returnElem = document.getElementById('kpiReturn');
+            const returnRate = Number(data.totalReturnRate);
+            returnElem.innerText = (returnRate >= 0 ? '+' : '') + returnRate.toFixed(2) + '%';
+            returnElem.className = 'text-rate ' + (returnRate >= 0 ? 'text-danger' : 'text-success'); // 台股習慣紅漲綠跌
+
+            // 更新 Chart.js 圖表
+            updateChart(data.totalInvestedAmount, data.finalAssetValue);
+
+        } catch (err) {
+            alert('回測發生錯誤！請確認資料庫是否有該區間的歷史股價與配息資料。');
+            console.error(err);
+        } finally {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="fa-solid fa-play me-2"></i>執行回測';
+        }
+    });
+
+    function updateChart(invested, finalVal) {
+        const ctx = document.getElementById('resultChart').getContext('2d');
+
+        if (myChart) {
+            myChart.destroy(); // 銷毀舊圖表以利重繪
+        }
+
+        myChart = new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: ['總投入本金', '最終總資產價值'],
+                datasets: [{
+                    label: '金額 (TWD)',
+                    data: [invested, finalVal],
+                    backgroundColor: [
+                        'rgba(108, 117, 125, 0.7)', // 灰色 (本金)
+                        'rgba(13, 110, 253, 0.7)'   // 藍色 (資產)
+                    ],
+                    borderColor: [
+                        'rgba(108, 117, 125, 1)',
+                        'rgba(13, 110, 253, 1)'
+                    ],
+                    borderWidth: 1.5,
+                    borderRadius: 8
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { display: false }
+                },
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        ticks: {
+                            callback: function(value) { return '$' + value.toLocaleString(); }
+                        }
+                    }
+                }
+            }
+        });
+    }
+</script>
+
+</body>
+</html>
